@@ -1,8 +1,10 @@
-use regex::Regex;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 #[allow(unused_imports)] // TODO: delete this line for Milestone 4
 use std::{fmt, fs};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use nix::libc;
+use regex::Regex;
 
 #[allow(unused)] // TODO: delete this line for Milestone 4
 const O_WRONLY: usize = 00000001;
@@ -134,10 +136,16 @@ impl OpenFile {
     /// program and we don't need to do fine-grained error handling, so returning Option is a
     /// simple way to indicate that "hey, we weren't able to get the necessary information"
     /// without making a big deal of it.)
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     pub fn from_fd(pid: usize, fd: usize) -> Option<OpenFile> {
-        // TODO: implement for Milestone 4
-        unimplemented!();
+        let path = format!("/proc/{}/fd/{}", pid, fd);
+        let link = fs::read_link(path).ok()?;
+        let path = format!("/proc/{}/fdinfo/{}", pid, fd);
+        let content = fs::read_to_string(path).ok()?;
+        Some(OpenFile{
+            name: OpenFile::path_to_name(link.to_str().unwrap()),
+            cursor: OpenFile::parse_cursor(content.as_str()).unwrap(),
+            access_mode: OpenFile::parse_access_mode(content.as_str()).unwrap(),
+        })
     }
 
     /// This function returns the OpenFile's name with ANSI escape codes included to colorize
@@ -160,9 +168,11 @@ impl OpenFile {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::ps_utils;
     use std::process::{Child, Command};
+
+    use crate::ps_utils;
+
+    use super::*;
 
     fn start_c_program(program: &str) -> Child {
         Command::new(program)
