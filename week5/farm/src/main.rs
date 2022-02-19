@@ -72,11 +72,30 @@ fn main() {
     let start = Instant::now();
 
     // TODO: call get_input_numbers() and store a queue of numbers to factor
-
+    let deque = get_input_numbers();
+    let deque = Arc::new(Mutex::new(deque));
     // TODO: spawn `num_threads` threads, each of which pops numbers off the queue and calls
     // factor_number() until the queue is empty
+    let mut handlers = vec![];
+    for _ in 0..num_threads {
+        let queue = Arc::clone(&deque);
+        let handler = thread::spawn(move || {
+            loop {
+                let num = queue.lock().unwrap().pop_front();
+                match num {
+                    Some(num) => {
+                        factor_number(num);
+                    },
+                    _ => break,
+                }
+            }
 
+        });
+        handlers.push(handler);
+    }
     // TODO: join all the threads you created
-
+    for handler in handlers {
+        handler.join();
+    }
     println!("Total execution time: {:?}", start.elapsed());
 }
