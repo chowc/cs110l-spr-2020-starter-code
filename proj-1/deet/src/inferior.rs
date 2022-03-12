@@ -1,3 +1,4 @@
+use std::io::Error;
 use std::os::unix::process::CommandExt;
 use nix::sys::ptrace;
 use nix::sys::signal;
@@ -44,61 +45,58 @@ impl Inferior {
                 .pre_exec(child_traceme)
                 .spawn()
                 .ok()?;
-            let i = Inferior{ child };
+            let i = Inferior { child };
+            // When a process that has PTRACE_TRACEME enabled calls exec, the OS will load the specified program into the process,
+            // and then, before the program starts running, it will pause the process with SIGTRAP.
             let status = i.wait(None).ok()?;
             let signal = match status {
                 Status::Stopped(signal, _) => {
                     Some(signal)
-                },
-                _ => None,
+                }
+                _ => None
             }?;
+            // wait until child process turns its status to Stopped
             match signal {
                 Signal::SIGTRAP => {
                     Some(i)
-                },
+                }
                 _ => None
             }
+
         }
     }
 
-/// Returns the pid of this inferior.
-pub fn pid(&self) -> Pid {
-    nix::unistd::Pid::from_raw(self.child.id() as i32)
-}
-
-/// Calls waitpid on this inferior and returns a Status to indicate the state of the process
-/// after the waitpid call.
-pub fn wait(&self, options: Option<WaitPidFlag>) -> Result<Status, nix::Error> {
-    Ok(match waitpid(self.pid(), options)? {
-        WaitStatus::Exited(_pid, exit_code) => Status::Exited(exit_code),
-        WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
-        WaitStatus::Stopped(_pid, signal) => {
-            let regs = ptrace::getregs(self.pid())?;
-            Status::Stopped(signal, regs.rip as usize)
-        }
-        other => panic!("waitpid returned unexpected status: {:?}", other),
-    })
-}
-
-/// Calls cont on this inferior to get the stopped child process start executing again.
-pub fn cont(&self) {
-    ptrace::cont(self.pid(), None).or(Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "ptrace cont failed",
-    ))).unwrap();
-    let status = self.wait(None).ok();
-    match status {
-        Some(Status::Exited(exit_code)) => {
-            println!("Child exited (status {})", exit_code);
-        },
-        Some(Status::Signaled(signal)) => {
-            println!("Child stopped (signal {})", signal);
-        },
-        Some(Status::Stopped(signal, _)) => {
-            println!("Child stopped (signal {})", signal);
-        },
-        _ => {}
+    /// Returns the pid of this inferior.
+    pub fn pid(&self) -> Pid {
+        nix::unistd::Pid::from_raw(self.child.id() as i32)
     }
-}
 
+    /// Calls waitpid on this inferior and returns a Status to indicate the state of the process
+    /// after the waitpid call.
+    pub fn wait(&self, options: Option<WaitPidFlag>) -> Result<Status, nix::Error> {
+        Ok(match waitpid(self.pid(), options)? {
+            WaitStatus::Exited(_pid, exit_code) => Status::Exited(exit_code),
+            WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
+            WaitStatus::Stopped(_pid, signal) => {
+                let regs = ptrace::getregs(self.pid())?;
+                Status::Stopped(signal, regs.rip as usize)
+            }
+            other => panic!("waitpid returned unexpected status: {:?}", other),
+        })
+    }
+
+    // Normally, SIGINT (triggered by Ctrl-C) will terminate a process, but if a process is being traced under ptrace,
+    // SIGINT will cause it to temporarily stop instead, as if it were sent SIGSTOP.
+    /// Calls cont on this inferior to get the stopped child process start executing again.
+    pub fn cont(&self) -> Result<(), Error> {
+        ptrace::cont(self.pid(), None).or(Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "ptrace cont failed",
+        )))
+    }
+
+    /// Calls kill on this inferior to kill it and reap the process.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
 }

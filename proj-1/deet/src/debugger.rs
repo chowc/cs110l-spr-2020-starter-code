@@ -1,3 +1,6 @@
+use libc::{exit, stat};
+use nix::Error;
+use nix::unistd::ForkResult::Child;
 use crate::debugger_command::DebuggerCommand;
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
@@ -32,22 +35,38 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if self.inferior.is_some() {
+                        let _ = self.inferior.take().unwrap().kill();
+                    }
+                    if let Some(mut inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
-                        &inferior.cont();
-
+                        let _ = inferior.cont();
+                        let result = inferior.wait(None);
+                        print_status(result);
                         self.inferior = Some(inferior);
                     } else {
                         println!("Error starting subprocess");
                     }
                 }
                 DebuggerCommand::Continue => {
-                    self.inferior.as_ref().unwrap().cont();
+                    if self.inferior.is_none() {
+                        println!("run process first");
+                        continue;
+                    }
+                    let inferior = self.inferior.as_ref().unwrap();
+                    let _ = inferior.cont();
+                    let result = inferior.wait(None);
+                    print_status(result);
                 }
                 DebuggerCommand::Quit => {
+                    if self.inferior.is_some() {
+                        let inferior = self.inferior.as_mut().unwrap();
+                        let _ = inferior.kill();
+                        let result = inferior.wait(None);
+                        print_status(result);
+                    }
                     return;
                 }
-
             }
         }
     }
@@ -91,5 +110,20 @@ impl Debugger {
                 }
             }
         }
+    }
+}
+
+fn print_status(result: Result<Status, nix::Error>) {
+    match result {
+        Ok(Status::Exited(exit_code)) => {
+            println!("Child exited (status {})", exit_code);
+        }
+        Ok(Status::Signaled(signal)) => {
+            println!("Child stopped (signal {})", signal);
+        }
+        Ok(Status::Stopped(signal, _)) => {
+            println!("Child stopped (signal {})", signal);
+        }
+        _ => {}
     }
 }
