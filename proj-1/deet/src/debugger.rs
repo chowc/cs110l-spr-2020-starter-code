@@ -53,8 +53,7 @@ impl Debugger {
                     if self.inferior.is_some() {
                         let _ = self.inferior.take().unwrap().kill();
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
-                        // Create the inferior
+                    if let Some(mut inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
                         let _ = inferior.cont();
                         let result = inferior.wait(None);
                         self.print_status(result);
@@ -68,7 +67,7 @@ impl Debugger {
                         println!("run process first");
                         continue;
                     }
-                    let inferior = self.inferior.as_ref().unwrap();
+                    let mut inferior = self.inferior.as_mut().unwrap();
                     let _ = inferior.cont();
                     let result = inferior.wait(None);
                     self.print_status(result);
@@ -91,13 +90,30 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::BreakPoint(regex) => {
-                    let regex = regex.replace("*", "");
-                    if let Some(addr) = Debugger::parse_address(regex.as_str()) {
-                        println!("Set breakpoint {} at {}",  self.breakpoints.len(), regex);
-                        if self.inferior.is_some() {
-                            self.inferior.as_mut().unwrap().write_byte(addr, 0xcc).unwrap();
+                    let mut point: u64 = 0;
+                    if regex.starts_with("*") {
+                        let nregex = regex.replace("*", "");
+                        if let Some(addr) = Debugger::parse_address(nregex.as_str()) {
+                            point = addr;
                         }
-                        self.breakpoints.push(addr);
+                        println!("no breakpoint set for {}", nregex);
+                        continue;
+                    }
+                    if let Some(line) = Debugger::parse_address(regex.as_str()) {
+                        if let Some(addr) = self.dwarf_data.get_addr_for_line(None, line as usize) {
+                            point = addr as u64;
+                        }
+                    } else if let Some(addr) = self.dwarf_data.get_addr_for_function(None, regex.as_str()) {
+                        point = addr as u64;
+                    }
+                    if point == 0 {
+                        println!("no breakpoint set for {}", regex);
+                        continue;
+                    }
+                    println!("Set breakpoint {} at {:#x}",  self.breakpoints.len(), point);
+                    self.breakpoints.push(point);
+                    if self.inferior.is_some() {
+                        self.inferior.as_mut().unwrap().write_byte(point, 0xcc).unwrap();
                     }
                 }
             }
@@ -159,7 +175,7 @@ impl Debugger {
                 //     print!("Stopped at {}", func);
                 // }
                 if let Some(line) = self.dwarf_data.get_line_from_addr(rip) {
-                    println!("{}", line);
+                    println!("rip {:#x}, {}", rip, line);
                 }
             }
             _ => {}

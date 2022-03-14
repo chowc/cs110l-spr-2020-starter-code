@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Error;
 use std::mem::size_of;
 use std::os::unix::process::CommandExt;
@@ -7,7 +8,7 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use std::process::{Child, Command};
 use gimli::SectionId::DebugInfo;
-use libc::{wait};
+use libc::{ptrace, wait};
 use nix::sys::ptrace::traceme;
 use nix::sys::signal::Signal;
 use crate::dwarf_data;
@@ -37,6 +38,7 @@ fn child_traceme() -> Result<(), std::io::Error> {
 
 pub struct Inferior {
     child: Child,
+    breakpoint: HashMap<u64, u8>,
 }
 
 impl Inferior {
@@ -49,7 +51,7 @@ impl Inferior {
                 .pre_exec(child_traceme)
                 .spawn()
                 .ok()?;
-            let mut i = Inferior { child };
+            let mut i = Inferior { child, breakpoint: HashMap::new() };
             // When a process that has PTRACE_TRACEME enabled calls exec, the OS will load the specified program into the process,
             // and then, before the program starts running, it will pause the process with SIGTRAP.
             let status = i.wait(None).ok()?;
@@ -69,7 +71,6 @@ impl Inferior {
                 }
                 _ => None
             }
-
         }
     }
 
@@ -95,7 +96,35 @@ impl Inferior {
     // Normally, SIGINT (triggered by Ctrl-C) will terminate a process, but if a process is being traced under ptrace,
     // SIGINT will cause it to temporarily stop instead, as if it were sent SIGSTOP.
     /// Calls cont on this inferior to get the stopped child process start executing again.
-    pub fn cont(&self) -> Result<(), Error> {
+    pub fn cont(&mut self) -> Result<(), Error> {
+        let mut regs = ptrace::getregs(self.pid()).unwrap();
+        let rip = regs.rip as u64;
+        let mut addr: u64 = 0;
+        let mut origin: u8 = 0;
+        for (k, v) in &self.breakpoint {
+            if *k == rip - 1 {
+                addr = *k;
+                origin = *v;
+                break;
+            }
+        }
+        if addr != 0 {
+            self.write_byte(addr, origin).unwrap();
+            regs.rip = rip - 1;
+            ptrace::setregs(self.pid(), regs).unwrap();
+            ptrace::step(self.pid(), None).unwrap();
+            match self.wait(None) {
+                Ok(Status::Exited(exit_code)) => {
+                    println!("Child exited (status {})", exit_code);
+                    return Ok(());
+                }
+                Ok(Status::Stopped(Signal::SIGTRAP, rip)) => {
+                    println!("stop at rip {:#x}", rip);
+                    self.write_byte(addr, 0xcc).unwrap();
+                }
+                _ => {}
+            }
+        }
         ptrace::cont(self.pid(), None).or(Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "ptrace cont failed",
@@ -120,6 +149,7 @@ impl Inferior {
     }
 
     pub(crate) fn write_byte(&mut self, addr: u64, val: u8) -> Result<u8, nix::Error> {
+        println!("write addr {:#x}", addr);
         let aligned_addr = align_addr_to_word(addr);
         let byte_offset = addr - aligned_addr;
         let word = ptrace::read(self.pid(), aligned_addr as ptrace::AddressType)? as u64;
@@ -131,6 +161,7 @@ impl Inferior {
             aligned_addr as ptrace::AddressType,
             updated_word as *mut std::ffi::c_void,
         )?;
+        self.breakpoint.insert(addr, orig_byte as u8);
         Ok(orig_byte as u8)
     }
 }
