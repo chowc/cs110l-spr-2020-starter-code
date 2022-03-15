@@ -4,6 +4,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response};
 use rand::Rng;
 use std::sync::{atomic, Arc};
+use log::log;
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
@@ -15,10 +16,13 @@ async fn echo(
     server_state: Arc<ServerState>,
     req: Request<Body>,
 ) -> Result<Response<Body>, hyper::Error> {
-    server_state
-        .requests_received
-        .fetch_add(1, atomic::Ordering::SeqCst);
     let mut req_text = format!("{} {} {:?}\n", req.method(), req.uri(), req.version());
+    // TODO: exclude only health check path
+    if !req.uri().to_string().ends_with("/") {
+        server_state
+            .requests_received
+            .fetch_add(1, atomic::Ordering::SeqCst);
+    }
     for (header_name, header_value) in req.headers() {
         req_text += &format!(
             "{}: {}\n",
