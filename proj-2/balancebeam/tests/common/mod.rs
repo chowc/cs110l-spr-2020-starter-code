@@ -4,7 +4,7 @@ mod error_server;
 mod server;
 
 use std::sync;
-
+use std::io::Write;
 pub use balancebeam::BalanceBeam;
 pub use echo_server::EchoServer;
 pub use error_server::ErrorServer;
@@ -15,6 +15,16 @@ static INIT_TESTS: sync::Once = sync::Once::new();
 pub fn init_logging() {
     INIT_TESTS.call_once(|| {
         pretty_env_logger::formatted_builder()
+            .format(|buf, record| {
+                writeln!(
+                    buf,
+                    "{}:{} [{}] - {}",
+                    record.file().unwrap_or("unknown"),
+                    record.line().unwrap_or(0),
+                    record.level(),
+                    record.args()
+                )
+            })
             .is_test(true)
             .parse_filters("info")
             .init();

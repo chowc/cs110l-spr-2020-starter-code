@@ -4,7 +4,6 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response};
 use rand::Rng;
 use std::sync::{atomic, Arc};
-use log::log;
 use tokio::sync::oneshot;
 
 #[derive(Debug)]

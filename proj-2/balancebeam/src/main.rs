@@ -1,6 +1,7 @@
 mod request;
 mod response;
 
+use std::io::Write;
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use async_std::channel::{unbounded};
 use std::thread;
 use std::time::Duration;
 use http::Request;
-use log::log;
+use log::{LevelFilter, log};
 use tokio::sync::{mpsc, Mutex};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
@@ -92,7 +93,19 @@ async fn main() {
     if let Err(_) = std::env::var("RUST_LOG") {
         std::env::set_var("RUST_LOG", "debug");
     }
-    pretty_env_logger::init();
+    pretty_env_logger::formatted_builder()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{}:{} [{}] - {}",
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.level(),
+                record.args()
+            )
+        })
+        .filter_level(LevelFilter::Debug)
+        .init();
 
     // Parse the command line arguments passed to this program
     let options = CmdOptions::parse();
